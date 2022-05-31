@@ -52,7 +52,9 @@ if [ "$11" = "bf" ]; then
   OPT=$11
 elif [ "$11" = "af" ]; then
   OPT=$11
-elif [ "$11" = "sync" ]; then
+elif [ "$11" = "disable" ]; then
+  OPT=$11
+elif [ "$11" = "enable" ]; then
   OPT=$11
 fi
 
@@ -72,7 +74,9 @@ chk_schema()
   if [ -e ${LOG_PREFIX}_auto_inc.log ]; then
     \rm -if ${LOG_PREFIX}_auto_inc.log
   fi	
-  CREATE_TABLE_LIST=`echo "show tables;" | ${MYSQL_CMD} | sort > table.list`
+  if [ ${LOG_PREFIX} = "before" ]; then
+    CREATE_TABLE_LIST=`echo "show tables;" | ${MYSQL_CMD} | sort > table.list`
+  fi
   while read LINE
   do
     AUTO_INC_CNT=`echo "show create table ${LINE} \G" | ${MYSQL_CMD} | grep "ENGINE=" | awk '{print $3}' | cut -d "=" -f 2`
@@ -100,7 +104,7 @@ sync_auto_inc()
       
      if [ ${bf_cnt} -gt ${af_cnt} ]; then 
        echo "-> Before is greater than After : ${bf_cnt}"  | tee -a operation.log
-       #echo "ALTER TABLE ${TABLE_NAME} AUTO_INCREMENT = ${bf_cnt} ;" 
+       echo ""
        echo "ALTER TABLE ${TABLE_NAME} AUTO_INCREMENT = ${bf_cnt} ;" | ${MYSQL_CMD_VERBOSE} | tee -a operation.log
      elif [ ${bf_cnt} -lt ${af_cnt} ]; then  
        echo "-> Skipped ALTER operation because After is greater than Before : ${af_cnt}"  | tee -a operation.log
@@ -108,7 +112,68 @@ sync_auto_inc()
        echo "-> Skipped because of the Same number!" | tee -a operation.log
      fi
   done < table.list
+  echo ""
+  echo ""
+  echo ""
 }
+
+###########################################################
+# disable database permission to create the static point
+###########################################################
+
+disable_DB_permission()
+{
+  if [ -e ${LOG_PREFIX}_show_grant.log ]; then
+    \rm -if ${LOG_PREFIX}_show_grant.log
+  fi
+  if [ -e revoke.log ]; then
+    \rm -if revoke.log
+  fi
+  if [ -e user.list ]; then
+    \rm -if user.list 
+  fi
+  echo "[User list]"
+  echo "select user, host from mysql.user;" | ${MYSQL_CMD} | egrep -v "mysql|root|localhost" | tee  user.list
+  echo "############"
+  echo ""
+  echo ""
+  echo ""
+  echo "[${LOG_PREFIX}_show_grant]"
+  cat user.list | awk '{print "show grants for `"$1"`@`"$2"` ;"}' | ${MYSQL_CMD} | sed -e "s/$/;/g" | tee -a ${LOG_PREFIX}_show_grant.log
+  echo "############"
+  echo ""
+  echo ""
+  echo ""
+  echo "[Permission Disable - REVOKE]"
+  cat user.list | awk '{print "REVOKE ALL PRIVILEGES, GRANT OPTION FROM `"$1"`@`"$2"` ;"}' | ${MYSQL_CMD_VERBOSE} | tee -a revoke.log
+}
+
+###########################################################
+# Enable database permission to create the static point
+###########################################################
+
+enable_DB_permission()
+{
+  if [ -e ${LOG_PREFIX}_show_grant.log ]; then
+    \rm -if ${LOG_PREFIX}_show_grant.log
+  fi
+  echo "[Permission Enable]"
+  cat ${LOG_PREFIX_BF}_show_grant.log | ${MYSQL_CMD_VERBOSE} | tee -a enable_result.log
+  echo "############"
+  echo ""
+  echo ""
+  echo ""
+  echo "[${LOG_PREFIX}_show_grant]"
+  cat user.list | awk '{print "show grants for `"$1"`@`"$2"` ;"}' | ${MYSQL_CMD} | sed -e "s/$/;/g" | tee -a ${LOG_PREFIX}_show_grant.log
+  echo "############"
+  echo ""
+  echo ""
+  echo ""
+  echo "[diff]"
+  diff -s ${LOG_PREFIX_BF}_show_grant.log ${LOG_PREFIX}_show_grant.log | tee diff.log
+}
+
+
 
 
 ############
@@ -121,14 +186,26 @@ case ${OPT} in
           \rm -if table.list
         fi
         chk_schema
+        disable_DB_permission
         ;;
   'af')
+        LOG_PREFIX_BF="before"
         LOG_PREFIX="after"
         if [ -e operation.log ]; then
           \rm -if operation.log
         fi
         chk_schema
         sync_auto_inc
+        enable_DB_permission
+        ;;
+  'disable')
+        LOG_PREFIX="before"
+        disable_DB_permission
+        ;;
+  'enable')
+        LOG_PREFIX_BF="before"
+        LOG_PREFIX="after"
+        enable_DB_permission
         ;;
 esac
 

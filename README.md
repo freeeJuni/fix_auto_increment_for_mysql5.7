@@ -1,0 +1,2 @@
+# fix_auto_increment_for_mysql5.7
+fix_auto_increment_for_mysql5.7

@@ -1,20 +1,43 @@
-#!/bin/bash
+#!/bin/sh
 
 #############
 # usage
 #############
 
 if [ "$1" = "" -o "$1" = "help" -o  "$1" = "-help" ]; then
-  echo " "
-  echo "it is the fixing script for auto_increment number after rebooting with MySQL 5.7 !!"
-  echo " "
-  echo "usage: sh sync.sh -h HOSTNAME -u USER -p PASSWORD -P 3306 -d DB_NAME bf(or af)"
-  echo " "
-  echo " [option]"
-  echo " : bf   = before reboot"
-  echo " : af   = after reboot"
-  echo " : sync = diff & syncing auto_increment"
-  echo " "
+  cat <<EOF
+
+it is the fixing script for auto_increment number after rebooting with MySQL 5.7 !!
+
+usage: ./for_mysql57_reboot.sh -h HOSTNAME -u USER -p PASSWORD -P 3306 -d DB_NAME bf(or af)
+
+[option]
+ : bf       = execution before reboot
+ : af       = execution after reboot
+ : disable  = ONLY execution permission disable
+ : enable   = ONLY execution permission enable
+
+[summary]
+# OPTION = bf
+before DB reboot,
+ - get schema information including auto_increment value
+ - disable DB permission
+
+# OPTION = af
+after DB reboot,
+ - check auto_increment difference
+ - fix auto_increment values
+ - enable DB permission
+
+# OPTION = disable
+before DB reboot,
+ - ONLY disable DB permission
+
+# OPTION = enable
+after DB reboot,
+ - ONLY enable DB permission
+
+EOF
   exit 9
 fi
 
@@ -63,7 +86,9 @@ fi
 # set MySQL command
 ######################
 MYSQL_CMD="mysql -N ${DB} -h${HOST} -u${USER} -p${PASSWORD} -P${PORT}"
+MYSQL_CMD_INFORMATION_SCHEMA="mysql -N information_schema -h${HOST} -u${USER} -p${PASSWORD} -P${PORT}"
 MYSQL_CMD_VERBOSE="mysql -vvv ${DB} -h${HOST} -u${USER} -p${PASSWORD} -P${PORT}"
+MYSQL_CMD_VERBOSE2="mysql -vv ${DB} -h${HOST} -u${USER} -p${PASSWORD} -P${PORT}"
 
 ############
 # check schema
@@ -77,11 +102,16 @@ chk_schema()
   if [ ${LOG_PREFIX} = "before" ]; then
     CREATE_TABLE_LIST=`echo "show tables;" | ${MYSQL_CMD} | sort > table.list`
   fi
+  echo "[Get Auto_increment values]"
   while read LINE
   do
-    AUTO_INC_CNT=`echo "show create table ${LINE} \G" | ${MYSQL_CMD} | grep "ENGINE=" | awk '{print $3}' | cut -d "=" -f 2`
-    echo "${LINE} ${AUTO_INC_CNT}" >> ${LOG_PREFIX}_auto_inc.log
+    AUTO_INC_CNT=`echo "select AUTO_INCREMENT from TABLES where TABLE_NAME = '${LINE}';" | ${MYSQL_CMD_INFORMATION_SCHEMA} | grep -v "AUTO_INCREMENT"`
+    #AUTO_INC_CNT=`echo "show create table ${LINE} \G" | ${MYSQL_CMD} | grep "ENGINE=" | awk '{print $3}' | cut -d "=" -f 2`
+    echo "${LINE} ${AUTO_INC_CNT}" | tee -a ${LOG_PREFIX}_auto_inc.log
   done < table.list
+  echo "############" 
+  echo "############" 
+  echo ""
 }
 
 
@@ -91,11 +121,10 @@ chk_schema()
 
 sync_auto_inc()
 {
+  echo "[Fix Auto_increment values]"
   while read TABLE_NAME
   do
-     echo "--------" | tee -a operation.log
-     echo "--------" | tee -a operation.log
-     echo "--------" | tee -a operation.log
+     echo "-----" | tee -a operation.log
      bf_cnt=`grep "${TABLE_NAME}" before_auto_inc.log | awk '{print $2}'`
      af_cnt=`grep "${TABLE_NAME}" after_auto_inc.log | awk '{print $2}'`
      echo ${TABLE_NAME} | tee -a operation.log
@@ -111,9 +140,11 @@ sync_auto_inc()
      elif [ ${bf_cnt} -eq ${af_cnt} ]; then  
        echo "-> Skipped because of the Same number!" | tee -a operation.log
      fi
+     echo " " | tee -a operation.log
   done < table.list
   echo ""
-  echo ""
+  echo "############" 
+  echo "############" 
   echo ""
 }
 
@@ -123,29 +154,18 @@ sync_auto_inc()
 
 disable_DB_permission()
 {
-  if [ -e ${LOG_PREFIX}_show_grant.log ]; then
-    \rm -if ${LOG_PREFIX}_show_grant.log
+  if [ -e disable_permission.log ]; then
+    \rm -if disable_permission.log
   fi
-  if [ -e revoke.log ]; then
-    \rm -if revoke.log
-  fi
-  if [ -e user.list ]; then
-    \rm -if user.list 
-  fi
-  echo "[User list]"
-  echo "select user, host from mysql.user;" | ${MYSQL_CMD} | egrep -v "mysql|root|localhost" | tee  user.list
-  echo "############"
+  echo "[Permission Disable]"
+  echo "update mysql.db set Db='tmp_${DB}' where Db='${DB}'; flush privileges;" | ${MYSQL_CMD_VERBOSE2} | tee -a disable_permission.log 
+  echo " " | tee -a disable_permission.log
+  echo "############" | tee -a disable_permission.log
+  echo "############" | tee -a disable_permission.log
+  echo " " | tee -a disable_permission.log
+  echo "select Host,Db,User from mysql.db;" | ${MYSQL_CMD_VERBOSE} | tee -a disable_permission.log
   echo ""
   echo ""
-  echo ""
-  echo "[${LOG_PREFIX}_show_grant]"
-  cat user.list | awk '{print "show grants for `"$1"`@`"$2"` ;"}' | ${MYSQL_CMD} | sed -e "s/$/;/g" | tee -a ${LOG_PREFIX}_show_grant.log
-  echo "############"
-  echo ""
-  echo ""
-  echo ""
-  echo "[Permission Disable - REVOKE]"
-  cat user.list | awk '{print "REVOKE ALL PRIVILEGES, GRANT OPTION FROM `"$1"`@`"$2"` ;"}' | ${MYSQL_CMD_VERBOSE} | tee -a revoke.log
 }
 
 ###########################################################
@@ -154,23 +174,20 @@ disable_DB_permission()
 
 enable_DB_permission()
 {
-  if [ -e ${LOG_PREFIX}_show_grant.log ]; then
-    \rm -if ${LOG_PREFIX}_show_grant.log
+  if [ -e enable_permission.log ]; then
+    \rm -if enable_permission.log
   fi
   echo "[Permission Enable]"
-  cat ${LOG_PREFIX_BF}_show_grant.log | ${MYSQL_CMD_VERBOSE} | tee -a enable_result.log
-  echo "############"
-  echo ""
-  echo ""
-  echo ""
-  echo "[${LOG_PREFIX}_show_grant]"
-  cat user.list | awk '{print "show grants for `"$1"`@`"$2"` ;"}' | ${MYSQL_CMD} | sed -e "s/$/;/g" | tee -a ${LOG_PREFIX}_show_grant.log
-  echo "############"
-  echo ""
+  echo "update mysql.db set Db='${DB}' where Db='tmp_${DB}'; flush privileges;" | ${MYSQL_CMD_VERBOSE2} | tee -a enable_permission.log
+  echo " " | tee -a enable_permission.log
+  echo "############" | tee -a enable_permission.log
+  echo "############" | tee -a enable_permission.log
+  echo " " | tee -a enable_permission.log
+  echo "select Host,Db,User from mysql.db;" | ${MYSQL_CMD_VERBOSE} | tee -a enable_permission.log
   echo ""
   echo ""
   echo "[diff]"
-  diff -s ${LOG_PREFIX_BF}_show_grant.log ${LOG_PREFIX}_show_grant.log | tee diff.log
+  diff -s disable_permission.log enable_permission.log | tee diff.log
 }
 
 
@@ -189,7 +206,6 @@ case ${OPT} in
         disable_DB_permission
         ;;
   'af')
-        LOG_PREFIX_BF="before"
         LOG_PREFIX="after"
         if [ -e operation.log ]; then
           \rm -if operation.log
@@ -199,12 +215,9 @@ case ${OPT} in
         enable_DB_permission
         ;;
   'disable')
-        LOG_PREFIX="before"
         disable_DB_permission
         ;;
   'enable')
-        LOG_PREFIX_BF="before"
-        LOG_PREFIX="after"
         enable_DB_permission
         ;;
 esac

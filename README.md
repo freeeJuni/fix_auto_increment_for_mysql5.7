@@ -1,5 +1,5 @@
 # fix_auto_increment_for_mysql5.7
-it is the fixing script for auto_increment number after rebooting with MySQL 5.7 !!
+it is the fixing script for auto_increment number after rebooting with MySQL 5.7 !!  
 and conducting permission disable / enable as well
 
 ### summary

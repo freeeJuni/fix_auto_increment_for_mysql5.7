@@ -26,7 +26,7 @@ after DB reboot,
 
 ### help
 ```
-sh sync.sh -help|help
+./for_mysql57_reboot.sh -help|help
 
 ```
 
